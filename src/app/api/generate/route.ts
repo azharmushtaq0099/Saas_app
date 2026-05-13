@@ -127,45 +127,60 @@ export async function POST(request: Request) {
     );
   }
 
-  await ensureUserRecord(user.id, user.email);
+  try {
+    await ensureUserRecord(user.id, user.email);
 
-  // Server-enforced usage tracking + paywall.
-  const { data: usage, error: usageError } = await supabase.rpc("consume_generation", {
-    limit_free: 3,
-  });
-  if (usageError) {
-    return NextResponse.json({ error: "Usage tracking failed" }, { status: 500 });
-  }
-  if (!usage?.[0]?.allowed) {
-    return NextResponse.json({ error: "Upgrade required" }, { status: 402 });
-  }
+    // Server-enforced usage tracking + paywall.
+    const { data: usage, error: usageError } = await supabase.rpc("consume_generation", {
+      limit_free: 3,
+    });
+    if (usageError) {
+      return NextResponse.json({ error: "Usage tracking failed" }, { status: 500 });
+    }
+    if (!usage?.[0]?.allowed) {
+      return NextResponse.json({ error: "Upgrade required" }, { status: 402 });
+    }
 
-  const output = await generateListingOutput(parsed.data, env.server.GEMINI_API_KEY);
-  if (!output) {
+    const output = await generateListingOutput(parsed.data, env.server.GEMINI_API_KEY);
+    if (!output) {
+      return NextResponse.json(
+        { error: "AI response format error. Please regenerate." },
+        { status: 502 },
+      );
+    }
+
+    // Persist listing server-side (non-blocking for UX if storage fails)
+    try {
+      const admin = createSupabaseAdminClient();
+      const { error: insertError } = await admin.from("listings").insert({
+        user_id: user.id,
+        input: parsed.data,
+        output,
+      });
+      if (insertError) {
+        console.error("/api/generate listing persist failed", insertError);
+      }
+    } catch (e) {
+      console.error("/api/generate listing persist threw", e);
+    }
+
+    const raw = formatRawListingOutput(output);
+    const policyWarnings = detectEtsyPolicyWarnings(`${buildPolicyRiskInputText(parsed.data)}\n${raw}`);
+
+    return NextResponse.json({
+      output,
+      complianceGuidance: buildComplianceGuidance(parsed.data, output),
+      policyWarnings,
+      raw,
+      warnings: getComplianceWarnings(raw),
+      usage: { used: usage[0].used, remaining: usage[0].remaining },
+    });
+  } catch (e) {
+    console.error("/api/generate live path error", e);
     return NextResponse.json(
-      { error: "AI response format error. Please regenerate." },
-      { status: 502 },
+      { error: "Unexpected server error. Please try again." },
+      { status: 500 },
     );
   }
-
-  // Persist listing server-side
-  const admin = createSupabaseAdminClient();
-  await admin.from("listings").insert({
-    user_id: user.id,
-    input: parsed.data,
-    output,
-  });
-
-  const raw = formatRawListingOutput(output);
-  const policyWarnings = detectEtsyPolicyWarnings(`${buildPolicyRiskInputText(parsed.data)}\n${raw}`);
-
-  return NextResponse.json({
-    output,
-    complianceGuidance: buildComplianceGuidance(parsed.data, output),
-    policyWarnings,
-    raw,
-    warnings: getComplianceWarnings(raw),
-    usage: { used: usage[0].used, remaining: usage[0].remaining },
-  });
 }
 

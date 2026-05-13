@@ -9,6 +9,10 @@ const UNSAFE_TO_SAFE_REPLACEMENTS: Array<{ pattern: RegExp; replacement: string 
   { pattern: /\bmarketplace approved\b/gi, replacement: "reviewed for marketplace-friendly wording" },
   { pattern: /\b100% compliant\b/gi, replacement: "educational compliance awareness guidance" },
   { pattern: /\blegal advice\b/gi, replacement: "educational compliance awareness" },
+  { pattern: /\bguaranteed results\b/gi, replacement: "results can vary by listing and market" },
+  { pattern: /\bFDA\b\s*approved\b/gi, replacement: "not a regulated health claim; verify before using health-related language" },
+  { pattern: /\bheirloom quality guaranteed\b/gi, replacement: "designed with lasting craftsmanship in mind; longevity varies by use and care" },
+  { pattern: /\bwill never\b\s*(shrink|fade|wear)\b/gi, replacement: "care instructions can help reduce shrinkage, fading, or wear over time" },
 ];
 
 function sanitizeText(text: string) {

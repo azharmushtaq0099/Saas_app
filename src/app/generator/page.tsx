@@ -1,11 +1,21 @@
-import { getEntitlementForUser, getUserOrThrow } from "@/lib/entitlements";
+import { redirect } from "next/navigation";
+
 import { GeneratorPlanBanner } from "@/components/GeneratorPlanBanner";
+import { getEntitlementForUser } from "@/lib/entitlements";
 import { isMockMode } from "@/lib/mock-mode";
+import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 import { Generator } from "../app/ui";
 
 export default async function GeneratorPage() {
-  const user = await getUserOrThrow();
+  const supabase = await createSupabaseServerClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) {
+    redirect("/login?next=/generator");
+  }
+
   const ent = await getEntitlementForUser(user.id);
 
   const isPro = Boolean(ent.is_pro);

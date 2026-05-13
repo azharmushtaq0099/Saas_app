@@ -115,13 +115,16 @@ export function Generator({ isMockMode }: { isMockMode: boolean }) {
     imageDataUrl?: string;
   } | null>(null);
   const [inputWarnings, setInputWarnings] = useState<string[]>([]);
-  const [humanReviewAccepted, setHumanReviewAccepted] = useState(() => {
-    if (typeof window === "undefined") return false;
-    return window.localStorage.getItem("human_review_acknowledged") === "true";
-  });
+  const [humanReviewAccepted, setHumanReviewAccepted] = useState(false);
   const [openMarketplaceNotices, setOpenMarketplaceNotices] = useState(true);
   const [openRegionNotices, setOpenRegionNotices] = useState(false);
   const [showHighRiskNotice, setShowHighRiskNotice] = useState(false);
+  const [checkoutError, setCheckoutError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    setHumanReviewAccepted(window.localStorage.getItem("human_review_acknowledged") === "true");
+  }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -153,11 +156,17 @@ export function Generator({ isMockMode }: { isMockMode: boolean }) {
     imageDataUrl?: string;
   }) {
     setError(null);
-    const res = await fetch("/api/generate", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(payload),
-    });
+    let res: Response;
+    try {
+      res = await fetch("/api/generate", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+    } catch {
+      setError("Network error. Check your connection and try again.");
+      return;
+    }
 
     const data = (await res.json().catch(() => null)) as
       | {
@@ -180,25 +189,46 @@ export function Generator({ isMockMode }: { isMockMode: boolean }) {
       return;
     }
 
-    setOutput(data?.output ?? null);
-    setRaw(data?.raw ?? "");
-    setWarnings(data?.warnings ?? []);
-    setPolicyWarnings(data?.policyWarnings ?? []);
-    setComplianceGuidance(data?.complianceGuidance ?? null);
-    setUsage(data?.usage ?? null);
-    const generatedText = JSON.stringify(data?.output ?? "").toLowerCase();
+    if (!data?.output) {
+      setError(data?.error ?? "Generation returned empty output. Please try again.");
+      setOutput(null);
+      setRaw("");
+      setWarnings([]);
+      setPolicyWarnings([]);
+      setComplianceGuidance(null);
+      setUsage(data?.usage ?? null);
+      return;
+    }
+
+    setOutput(data.output);
+    setRaw(data.raw ?? "");
+    setWarnings(data.warnings ?? []);
+    setPolicyWarnings(data.policyWarnings ?? []);
+    setComplianceGuidance(data.complianceGuidance ?? null);
+    setUsage(data.usage ?? null);
+    const generatedText = JSON.stringify(data.output).toLowerCase();
     const hasHighRiskSignal = HIGH_RISK_CATEGORY_SIGNALS.some((signal) => signal.test(generatedText));
     setShowHighRiskNotice(hasHighRiskSignal);
     await refreshProfile();
-    if (typeof window !== "undefined" && data?.usage) {
+    if (typeof window !== "undefined" && data.usage) {
       const currentRaw = localStorage.getItem("mock_user_state");
-      const current = currentRaw ? JSON.parse(currentRaw) : {};
+      let current: Record<string, unknown> = {};
+      if (currentRaw) {
+        try {
+          const parsed: unknown = JSON.parse(currentRaw);
+          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+            current = parsed as Record<string, unknown>;
+          }
+        } catch {
+          current = {};
+        }
+      }
       localStorage.setItem(
         "mock_user_state",
         JSON.stringify({
           id: "mock-user",
           email: "demo@test.com",
-          is_pro: Boolean(current?.is_pro),
+          is_pro: Boolean(current.is_pro),
           usage_count: data.usage.used,
         }),
       );
@@ -266,9 +296,15 @@ export function Generator({ isMockMode }: { isMockMode: boolean }) {
                 productionStatus,
                 imageDataUrl,
               };
-              if (!productTitle && !keywords && !productType) {
+              if (
+                !productTitle &&
+                !keywords &&
+                !productType &&
+                !productText &&
+                !imageDataUrl
+              ) {
                 setInputWarnings([
-                  "Please add a product title, keywords, or product type before generating.",
+                  "Please add a product title, keywords, product type, product text, or a product image before generating.",
                 ]);
                 return;
               }
@@ -676,6 +712,30 @@ export function Generator({ isMockMode }: { isMockMode: boolean }) {
                 </div>
               ) : null}
 
+              {output.seoKeywords.length ? (
+                <div className="premium-card p-6">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                      SEO keywords
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {copiedKey === "seo" ? (
+                        <span className="text-xs font-medium text-slate-700">Copied</span>
+                      ) : null}
+                      <CopyIconButton
+                        label="Copy SEO keywords"
+                        onClick={() =>
+                          copyWithFeedback("seo", output.seoKeywords.join(" | "))
+                        }
+                      />
+                    </div>
+                  </div>
+                  <p className="mt-3 text-sm leading-relaxed text-slate-700">
+                    {output.seoKeywords.join(" · ")}
+                  </p>
+                </div>
+              ) : null}
+
               <div className="premium-card p-6">
                 <div className="flex items-center justify-between gap-3">
                   <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
@@ -966,10 +1026,18 @@ export function Generator({ isMockMode }: { isMockMode: boolean }) {
             <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
               You have reached the free limit (3 generations). Upgrade to Pro for unlimited access.
             </p>
+            {checkoutError ? (
+              <p className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                {checkoutError}
+              </p>
+            ) : null}
             <div className="mt-8 flex flex-col gap-3 sm:flex-row">
               <Button
                 type="button"
-                onClick={() => setShowUpgradeModal(false)}
+                onClick={() => {
+                  setShowUpgradeModal(false);
+                  setCheckoutError(null);
+                }}
                 variant="secondary"
                 className="h-11 flex-1"
               >
@@ -981,6 +1049,7 @@ export function Generator({ isMockMode }: { isMockMode: boolean }) {
                 disabled={isCheckoutPending}
                 onClick={async () => {
                   setIsCheckoutPending(true);
+                  setCheckoutError(null);
                   try {
                     const res = await fetch("/api/stripe/checkout", {
                       method: "POST",
@@ -992,6 +1061,7 @@ export function Generator({ isMockMode }: { isMockMode: boolean }) {
                       | { url?: string; error?: string }
                       | null;
                     if (!res.ok) {
+                      setCheckoutError(data?.error ?? "Checkout could not start. Try again.");
                       return;
                     }
                     if (isMockMode) {
@@ -1002,6 +1072,8 @@ export function Generator({ isMockMode }: { isMockMode: boolean }) {
                     }
                     if (data?.url) {
                       window.location.href = data.url;
+                    } else {
+                      setCheckoutError("Checkout session missing redirect URL.");
                     }
                   } finally {
                     setIsCheckoutPending(false);

@@ -8,7 +8,8 @@ export const listingInputSchema = z.object({
   productTitle: z.string().max(180).optional(),
   keywords: z.string().max(500).optional(),
   productText: z.string().max(3000).optional(),
-  imageDataUrl: z.string().optional(),
+  /** Base64 data URLs can be large; cap to reduce accidental OOM / abuse. */
+  imageDataUrl: z.string().max(12_000_000).optional(),
   productType: z.string().max(120).optional(),
   material: z.string().max(120).optional(),
   targetAudience: z.string().max(160).optional(),

@@ -20,22 +20,38 @@ export async function POST(request: Request) {
     return res;
   }
 
-  const user = await getUserOrThrow();
+  let user;
+  try {
+    user = await getUserOrThrow();
+  } catch {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
   const successUrl = new URL("/account?checkout=success", env.client.NEXT_PUBLIC_APP_URL);
   const cancelUrl = new URL("/pricing?checkout=cancel", env.client.NEXT_PUBLIC_APP_URL);
 
-  const session = await stripe.checkout.sessions.create({
-    mode: "payment",
-    customer_email: user.email ?? undefined,
-    line_items: [{ price: env.server.STRIPE_PRICE_ID, quantity: 1 }],
-    allow_promotion_codes: true,
-    success_url: successUrl.toString(),
-    cancel_url: cancelUrl.toString(),
-    metadata: {
-      user_id: user.id,
-      unlock: "pro_lifetime",
-    },
-  });
+  let session;
+  try {
+    session = await stripe.checkout.sessions.create({
+      mode: "payment",
+      customer_email: user.email ?? undefined,
+      line_items: [{ price: env.server.STRIPE_PRICE_ID, quantity: 1 }],
+      allow_promotion_codes: true,
+      success_url: successUrl.toString(),
+      cancel_url: cancelUrl.toString(),
+      metadata: {
+        user_id: user.id,
+        unlock: "pro_lifetime",
+      },
+    });
+  } catch (e) {
+    console.error("/api/stripe/checkout session create failed", e);
+    return NextResponse.json({ error: "Checkout unavailable. Try again shortly." }, { status: 503 });
+  }
+
+  if (!session.url) {
+    return NextResponse.json({ error: "Checkout session missing redirect URL." }, { status: 502 });
+  }
 
   return NextResponse.json({ url: session.url });
 }
